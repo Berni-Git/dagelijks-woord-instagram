@@ -76,7 +76,7 @@ def fetch_online_verse():
     try:
         resp = requests.get(
             "https://bijbelapi.com/api/daytext",
-            params={"version": "sv", "date": date.today().isoformat()},
+            params={"version": "hs1917", "date": date.today().isoformat()},
             headers={"Accept": "application/json"},
             timeout=15,
         )
