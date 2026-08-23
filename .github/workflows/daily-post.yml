@@ -1,0 +1,56 @@
+name: Publication quotidienne du verset
+
+on:
+  schedule:
+    # 07:00 UTC = ~8-9h à Bruxelles selon l'heure d'été/hiver.
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}  # permet de lancer le workflow manuellement pour tester
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dépendances
+        run: pip install pillow requests pynacl
+
+      - name: Renouveler le token Instagram
+        id: refresh
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python refresh_token.py
+
+      - name: Générer l'image du jour
+        env:
+          UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+        run: python generate_image.py
+
+      - name: Committer et pousser l'image générée
+        run: |
+          git config user.name "verse-bot"
+          git config user.email "verse-bot@users.noreply.github.com"
+          git add images/verse_of_the_day.png caption.txt
+          git commit -m "Verset du jour $(date +'%Y-%m-%d')" || echo "Rien à committer"
+          git push
+
+      - name: Attendre que l'image soit disponible publiquement
+        run: sleep 20
+
+      - name: Publier sur Instagram
+        env:
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ steps.refresh.outputs.new_token }}
+          IMAGE_URL: https://raw.githubusercontent.com/${{ github.repository }}/main/images/verse_of_the_day.png
+        run: python post_to_instagram.py
