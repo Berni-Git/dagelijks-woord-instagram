@@ -2,8 +2,8 @@ name: Publication quotidienne du verset
 
 on:
   schedule:
-    # 07:00 UTC = ~8-9h à Bruxelles selon l'heure d'été/hiver.
-    - cron: "0 7 * * *"
+    # 04:00 UTC = ~6-7h à Bruxelles selon l'heure d'été/hiver.
+    - cron: "0 4 * * *"
   workflow_dispatch: {}  # permet de lancer le workflow manuellement pour tester
 
 permissions:
