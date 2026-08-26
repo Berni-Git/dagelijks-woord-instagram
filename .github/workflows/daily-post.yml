@@ -2,9 +2,16 @@ name: Publication quotidienne du verset
 
 on:
   schedule:
-    # 04:00 UTC = ~6-7h à Bruxelles selon l'heure d'été/hiver.
+    # 04:00 UTC = 6h00 à Bruxelles en heure d'été (UTC+2, en vigueur jusqu'à
+    # fin octobre 2026). Passera à 5h00 heure locale en hiver (UTC+1) — GitHub
+    # Actions ne gère que l'UTC, pas les fuseaux avec heure d'été/hiver.
     - cron: "0 4 * * *"
-  workflow_dispatch: {}  # permet de lancer le workflow manuellement pour tester
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Publier même si un post a déjà été fait aujourd'hui"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -16,15 +23,30 @@ jobs:
       - name: Checkout du dépôt
         uses: actions/checkout@v4
 
+      - name: Vérifier si déjà publié aujourd'hui
+        id: check_date
+        run: |
+          TODAY=$(date -u +'%Y-%m-%d')
+          FORCE="${{ github.event.inputs.force }}"
+          if [ -f last_post_date.txt ] && [ "$(cat last_post_date.txt)" = "$TODAY" ] && [ "$FORCE" != "true" ]; then
+            echo "Déjà publié aujourd'hui ($TODAY), on ignore ce run pour éviter un doublon."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Installer Python
+        if: steps.check_date.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Installer les dépendances
+        if: steps.check_date.outputs.should_run == 'true'
         run: pip install pillow requests pynacl
 
       - name: Renouveler le token Instagram
+        if: steps.check_date.outputs.should_run == 'true'
         id: refresh
         env:
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
@@ -33,24 +55,30 @@ jobs:
         run: python refresh_token.py
 
       - name: Générer l'image du jour
+        if: steps.check_date.outputs.should_run == 'true'
         env:
           UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
         run: python generate_image.py
 
       - name: Committer et pousser l'image générée
+        if: steps.check_date.outputs.should_run == 'true'
         run: |
+          date -u +'%Y-%m-%d' > last_post_date.txt
           git config user.name "verse-bot"
           git config user.email "verse-bot@users.noreply.github.com"
-          git add images/verse_of_the_day.png caption.txt
+          git add images/verse_of_the_day.png caption.txt last_post_date.txt
           git commit -m "Verset du jour $(date +'%Y-%m-%d')" || echo "Rien à committer"
           git push
 
       - name: Attendre que l'image soit disponible publiquement
+        if: steps.check_date.outputs.should_run == 'true'
         run: sleep 20
 
       - name: Publier sur Instagram
+        if: steps.check_date.outputs.should_run == 'true'
         env:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_ACCESS_TOKEN: ${{ steps.refresh.outputs.new_token }}
           IMAGE_URL: https://raw.githubusercontent.com/${{ github.repository }}/main/images/verse_of_the_day.png
         run: python post_to_instagram.py
+        
