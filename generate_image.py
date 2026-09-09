@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
 """
 Génère une image carrée (1080x1080, format Instagram) avec le verset du jour,
-sur fond de photo de nature (montagne, forêt, plage, étoiles, terre depuis
-l'espace, désert, cascade, lac...) récupérée via l'API Unsplash.
+sur fond de photo de nature récupérée via l'API Unsplash.
 
-Le verset lui-même vient de BijbelAPI (bijbelapi.com), une API néerlandaise
-gratuite qui expose un endpoint "verset du jour" basé sur la date et qui
-pioche dans toute la Bible (Statenvertaling) — donc des milliers de versets
-possibles, pas de répétition avant très longtemps. Si cette API est
-indisponible un jour (panne, quota, pas de réseau...), le script bascule sur
-la petite liste locale `verses.json` en secours, pour que la publication ne
-soit jamais bloquée.
-
-Nécessite la variable d'environnement UNSPLASH_ACCESS_KEY (sinon fond de
-couleur unie utilisé automatiquement).
+ORDRE DE PRIORITÉ POUR LE VERSET :
+1. nbv21_verses.json (NBV21, autorisation obtenue du NBG) — si non vide
+2. BijbelAPI (hs1917, domaine public) — si le fichier NBV21 est vide/épuisé
+3. verses.json (secours local, domaine public) — si BijbelAPI est injoignable
 """
 import io
 import json
@@ -25,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 SIZE = 1080
 TEXT_COLOR = (250, 250, 245)
-ACCENT_COLOR = (232, 196, 120)  # doré, lisible sur fond sombre
+ACCENT_COLOR = (232, 196, 120)
 FALLBACK_BG = (25, 32, 44)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,22 +34,12 @@ FONT_CANDIDATES_BOLD = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ]
 
-# Thèmes nature uniquement — surtout pas de bâtiments / architecture.
-# "topics=6sMVjTLSkeQ" restreint la recherche au topic officiel Unsplash "Nature".
 NATURE_TOPIC_ID = "6sMVjTLSkeQ"
 NATURE_QUERIES = [
-    "mountain landscape",
-    "forest trees sunlight",
-    "ocean beach waves",
-    "starry night sky",
-    "earth from space",
-    "desert dunes",
-    "waterfall nature",
-    "lake reflection mountains",
-    "sunrise landscape nature",
-    "snowy mountains nature",
-    "northern lights aurora",
-    "green valley nature",
+    "mountain landscape", "forest trees sunlight", "ocean beach waves",
+    "starry night sky", "earth from space", "desert dunes",
+    "waterfall nature", "lake reflection mountains", "sunrise landscape nature",
+    "snowy mountains nature", "northern lights aurora", "green valley nature",
 ]
 
 
@@ -67,12 +50,34 @@ def find_font(candidates, size):
     return ImageFont.load_default()
 
 
+# ---------- SÉLECTION DU VERSET (la seule partie qui change) ----------
+
+def pick_nbv21_verse():
+    """
+    Priorité 1 : liste locale NBV21 (autorisée par le NBG).
+    Chaque entrée a un champ "day" (jour de l'année, 1-365) précis — on
+    cherche une correspondance exacte avec aujourd'hui, pas un simple index
+    de liste, pour que le remplissage progressif (mois par mois) reste
+    toujours correctement aligné sur le calendrier.
+    """
+    path = os.path.join(HERE, "nbv21_verses.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        verses = json.load(f)
+    if not verses:
+        return None
+    today_day = date.today().timetuple().tm_yday
+    for v in verses:
+        if v.get("day") == today_day:
+            print(f"Verset NBV21 trouvé pour le jour {today_day} : {v['reference']}")
+            return {"reference": v["reference"], "text": v["text"]}
+    print(f"Pas de verset NBV21 pour le jour {today_day} (liste incomplète) : passage à BijbelAPI.")
+    return None
+
+
 def fetch_online_verse():
-    """
-    Récupère le verset du jour depuis BijbelAPI (bijbelapi.com), en
-    néerlandais (Statenvertaling). Retourne None si l'appel échoue ou si la
-    réponse est inattendue, pour déclencher le secours local.
-    """
+    """Priorité 2 : BijbelAPI (hs1917, domaine public)."""
     try:
         resp = requests.get(
             "https://bijbelapi.com/api/daytext",
@@ -82,20 +87,12 @@ def fetch_online_verse():
         )
         resp.raise_for_status()
         data = resp.json()
-
         text = data.get("text")
         if not text or len(text.strip()) < 5:
             print("BijbelAPI : réponse sans texte exploitable, secours local utilisé.")
             return None
-
-        book = data.get("book")
-        chapter = data.get("chapter")
-        verse = data.get("verse")
-        if book and chapter and verse:
-            reference = f"{book} {chapter}:{verse}"
-        else:
-            reference = data.get("reference") or ""
-
+        book, chapter, verse = data.get("book"), data.get("chapter"), data.get("verse")
+        reference = f"{book} {chapter}:{verse}" if book and chapter and verse else (data.get("reference") or "")
         print(f"Verset récupéré via BijbelAPI : {reference}")
         return {"reference": reference, "text": text.strip()}
     except (requests.RequestException, ValueError, KeyError) as e:
@@ -104,7 +101,7 @@ def fetch_online_verse():
 
 
 def pick_local_verse():
-    """Secours local : liste restreinte de versets, en cas de panne de l'API."""
+    """Priorité 3 : secours local ultime (SV, domaine public)."""
     with open(os.path.join(HERE, "verses.json"), encoding="utf-8") as f:
         verses = json.load(f)
     idx = date.today().timetuple().tm_yday % len(verses)
@@ -112,8 +109,10 @@ def pick_local_verse():
 
 
 def pick_verse():
-    return fetch_online_verse() or pick_local_verse()
+    return pick_nbv21_verse() or fetch_online_verse() or pick_local_verse()
 
+
+# ---------- GÉNÉRATION DE L'IMAGE (inchangé) ----------
 
 def pick_query():
     idx = date.today().timetuple().tm_yday % len(NATURE_QUERIES)
@@ -121,7 +120,6 @@ def pick_query():
 
 
 def fetch_nature_background():
-    """Récupère une photo de nature carrée depuis Unsplash. Retourne None en cas d'échec."""
     access_key = os.environ.get("UNSPLASH_ACCESS_KEY")
     if not access_key:
         print("UNSPLASH_ACCESS_KEY absent : fond de couleur unie utilisé.")
@@ -130,28 +128,17 @@ def fetch_nature_background():
     try:
         resp = requests.get(
             "https://api.unsplash.com/photos/random",
-            params={
-                "query": query,
-                "topics": NATURE_TOPIC_ID,
-                "orientation": "squarish",
-                "content_filter": "high",
-            },
+            params={"query": query, "topics": NATURE_TOPIC_ID, "orientation": "squarish", "content_filter": "high"},
             headers={"Authorization": f"Client-ID {access_key}"},
             timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
         image_url = data["urls"]["regular"]
-        # Bonne pratique Unsplash : signaler le téléchargement (non bloquant si ça échoue)
         try:
-            requests.get(
-                data["links"]["download_location"],
-                headers={"Authorization": f"Client-ID {access_key}"},
-                timeout=10,
-            )
+            requests.get(data["links"]["download_location"], headers={"Authorization": f"Client-ID {access_key}"}, timeout=10)
         except requests.RequestException:
             pass
-
         img_resp = requests.get(image_url, timeout=20)
         img_resp.raise_for_status()
         img = Image.open(io.BytesIO(img_resp.content)).convert("RGB")
@@ -164,10 +151,8 @@ def fetch_nature_background():
 def crop_to_square(img):
     w, h = img.size
     side = min(w, h)
-    left = (w - side) // 2
-    top = (h - side) // 2
-    img = img.crop((left, top, left + side, top + side))
-    return img.resize((SIZE, SIZE), Image.LANCZOS)
+    left, top = (w - side) // 2, (h - side) // 2
+    return img.crop((left, top, left + side, top + side)).resize((SIZE, SIZE), Image.LANCZOS)
 
 
 def wrap_text(draw, text, font, max_width):
@@ -191,13 +176,11 @@ def make_image(verse):
     if bg is None:
         base = Image.new("RGB", (SIZE, SIZE), FALLBACK_BG)
     else:
-        # Léger flou + assombrissement de l'ensemble pour la lisibilité générale
         base = bg.filter(ImageFilter.GaussianBlur(1.5))
         dark_overlay = Image.new("RGBA", (SIZE, SIZE), (10, 12, 18, 90))
         base = Image.alpha_composite(base.convert("RGBA"), dark_overlay).convert("RGB")
 
     draw = ImageDraw.Draw(base, "RGBA")
-
     margin = 110
     max_width = SIZE - 2 * margin
 
@@ -217,39 +200,27 @@ def make_image(verse):
     lines = wrap_text(draw, verse["text"], verse_font, max_width)
     line_height = int(font_size * 1.4)
     block_height = len(lines) * line_height
-
     ref_text = verse["reference"].upper()
     extra_for_ref = 90
-
     total_height = block_height + extra_for_ref
     start_y = (SIZE - total_height) // 2
 
-    # Panneau semi-transparent derrière le texte pour garantir la lisibilité
-    # quel que soit le fond (ciel clair, sable, neige...).
     pad_x, pad_y = 60, 50
     panel_top = start_y - pad_y
     panel_bottom = start_y + total_height + pad_y
-    draw.rounded_rectangle(
-        [(margin - pad_x, panel_top), (SIZE - margin + pad_x, panel_bottom)],
-        radius=28,
-        fill=(8, 10, 16, 120),
-    )
+    draw.rounded_rectangle([(margin - pad_x, panel_top), (SIZE - margin + pad_x, panel_bottom)], radius=28, fill=(8, 10, 16, 120))
 
     y = start_y
     for line in lines:
         w = draw.textlength(line, font=verse_font)
-        x = (SIZE - w) / 2
-        draw.text((x, y), line, font=verse_font, fill=TEXT_COLOR)
+        draw.text(((SIZE - w) / 2, y), line, font=verse_font, fill=TEXT_COLOR)
         y += line_height
 
     ref_w = draw.textlength(ref_text, font=ref_font)
     draw.text(((SIZE - ref_w) / 2, y + 30), ref_text, font=ref_font, fill=ACCENT_COLOR)
 
     line_w = 70
-    draw.rectangle(
-        [(SIZE - line_w) / 2, y + 20, (SIZE + line_w) / 2, y + 23],
-        fill=ACCENT_COLOR,
-    )
+    draw.rectangle([(SIZE - line_w) / 2, y + 20, (SIZE + line_w) / 2, y + 23], fill=ACCENT_COLOR)
 
     os.makedirs(OUT_DIR, exist_ok=True)
     base.save(OUT_PATH, "PNG")
